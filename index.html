@@ -49,12 +49,16 @@
 
         let isProgramActive = false;
         let lastBlinkTime = 0;
+        const MOUTH_OPEN_THRESHOLD = 0.05; // Ratio hauteur bouche
         const FULL_CLOSE_DURATION = 2000; // 3 secondes
-        const EYE_CLOSED_THRESHOLD = 0.25; // Seuil pour déterminer si l'œil est fermé (ratio hauteur/largeur)
+        const EYE_CLOSED_THRESHOLD = 0.15; // Seuil pour déterminer si l'œil est fermé (ratio hauteur/largeur)
         const IRIS_MOVEMENT_THRESHOLD = 0.05; // Seuil de déplacement de l'iris (position X)
 
         // Indice des points clés dans Face Mesh pour les yeux et l'iris
         // Source: https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_geometry/data/face_landmarks_with_iris.csv
+        // Indices des points MediaPipe
+        const UPPER_LIP = 13;
+        const LOWER_LIP = 14;
         const LEFT_EYE_INDICES = [362, 382, 381, 380, 374, 390, 249, 263]; // Pour le ratio d'aspect de l'œil gauche
         const RIGHT_EYE_INDICES = [33, 7, 163, 144, 145, 153, 154, 155];   // Pour le ratio d'aspect de l'œil droit
         const LEFT_IRIS_CENTER_INDEX = 468;
@@ -103,6 +107,9 @@
         }
 
         // --- Fonctions de Détection des Yeux ---
+        // Bouche
+            const mouthDist = distance(landmarks[UPPER_LIP], landmarks[LOWER_LIP]);
+            const isMouthOpen = mouthDist > MOUTH_OPEN_THRESHOLD;
 
         // Calcul du Eye Aspect Ratio (EAR) pour l'ouverture de l'œil
         function getEAR(landmarks, eyeIndices) {
