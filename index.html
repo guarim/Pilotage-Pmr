@@ -1,143 +1,72 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Hand detection + Arduino</title>
+<script type="module">
+  import {FaceMesh} from "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js";
+  import {drawConnectors, drawLandmarks} from "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.4/drawing_utils.js";
 
-<style>
-body { background:#111; color:white; text-align:center; }
-canvas { border:1px solid #444; }
-#connectBtn { padding:10px 20px; font-size:18px; }
-</style>
+  const video = document.createElement("video");
+  video.setAttribute("autoplay", "");
+  video.setAttribute("playsinline", "");
+  video.style.display = "none";
+  document.body.appendChild(video);
 
-<!-- MediaPipe -->
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  const canvas = document.getElementById("videoCanvas");
+  const ctx = canvas.getContext("2d");
 
-</head>
-<body>
-
-<h2>Détection de mains + Contrôle Arduino</h2>
-
-<button id="connectBtn">Connecter Arduino</button><br><br>
-
-<video id="video" autoplay playsinline style="display:none;" width="640" height="480"></video>
-<canvas id="output" width="640" height="480"></canvas>
-
-<script>
-/* -------------------------------------------------------------
-   WebSerial Arduino
---------------------------------------------------------------*/
-let writer;
-
-async function connectArduino() {
-  const port = await navigator.serial.requestPort();
-  await port.open({ baudRate: 9600 });
-  writer = port.writable.getWriter();
-  alert("Arduino connecté !");
-}
-document.getElementById("connectBtn").onclick = connectArduino;
-
-async function sendToArduino(x) {
-  if (writer) writer.write(new Uint8Array([x]));
-}
-
-/* -------------------------------------------------------------
-   Zones
---------------------------------------------------------------*/
-const leftZone  = { x: 160, y: 240, r: 80 };
-const rightZone = { x: 480, y: 240, r: 80 };
-
-/* -------------------------------------------------------------
-   MediaPipe
---------------------------------------------------------------*/
-const video  = document.getElementById("video");
-const canvas = document.getElementById("output");
-const ctx    = canvas.getContext("2d");
-
-function drawCircle(x,y,r){
-  ctx.beginPath();
-  ctx.arc(x,y,r,0,Math.PI*2);
-  ctx.strokeStyle = "red";
-  ctx.lineWidth = 3;
-  ctx.stroke();
-}
-
-function insideZone(x,y,zone){
-  return Math.hypot(x-zone.x, y-zone.y) < zone.r;
-}
-
-const hands = new Hands({
-  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-});
-
-hands.setOptions({
-  selfieMode: true,
-  maxNumHands: 2,
-  modelComplexity: 1,
-  minDetectionConfidence: 0.6,
-  minTrackingConfidence: 0.5
-});
-
-hands.onResults(results => {
-  // IMPORTANT : dessiner d’abord l'image brute
-  ctx.save();
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.drawImage(results.image,0,0,canvas.width,canvas.height);
-
-  // Dessine zones
-  drawCircle(leftZone.x, leftZone.y, leftZone.r);
-  drawCircle(rightZone.x,rightZone.y,rightZone.r);
-
-  if (!results.multiHandLandmarks) {
-    ctx.restore();
-    return;
+  // ---- Startup webcam ----
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720 }
+      });
+      video.srcObject = stream;
+      await video.play();
+      console.log("🎥 Webcam OK");
+      requestAnimationFrame(processFrame);
+    } catch (err) {
+      console.error("Erreur webcam :", err);
+    }
   }
 
-  results.multiHandLandmarks.forEach((lm, index) => {
-    const handedness = results.multiHandedness[index].label; // "Left" / "Right"
-
-    let ix = lm[8].x * canvas.width;
-    let iy = lm[8].y * canvas.height;
-    let tx = lm[4].x * canvas.width;
-    let ty = lm[4].y * canvas.height;
-
-    let touching = Math.hypot(ix - tx, iy - ty) < 40;
-
-    if (handedness === "Left") {
-      if (insideZone(ix, iy, leftZone) && touching) sendToArduino(1);
-      else sendToArduino(2);
-    }
-
-    if (handedness === "Right") {
-      if (insideZone(ix, iy, rightZone) && touching) sendToArduino(3);
-      else sendToArduino(4);
-    }
-
-    window.drawConnectors(ctx, lm, Hands.HAND_CONNECTIONS,
-      { color: "#00FF00", lineWidth: 2 });
-    window.drawLandmarks(ctx, lm,
-      { color: "#FFFF00", lineWidth: 1 });
+  // ---- Mediapipe setup ----
+  const faceMesh = new FaceMesh({
+    locateFile: file =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`
   });
 
-  ctx.restore();
-});
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
 
-/* -------------------------------------------------------------
-   Démarrer la caméra correctement
---------------------------------------------------------------*/
-const cam = new Camera(video, {
-  width: 640,
-  height: 480,
-  onFrame: async () => {
-    await hands.send({ image: video });
+  faceMesh.onResults(onResults);
+
+  // ---- Draw loop ----
+  async function processFrame() {
+    if (video.videoWidth > 0) {
+      await faceMesh.send({ image: video });
+    }
+    requestAnimationFrame(processFrame);
   }
-});
 
-cam.start();
+  // ---- Process landmarks ----
+  function onResults(results) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
+    if (!results.multiFaceLandmarks) return;
+
+    const lm = results.multiFaceLandmarks[0];
+
+    // Exemple : afficher seulement iris et yeux
+    drawLandmarks(ctx, lm.slice(468, 478), { color: "#00FFFF", radius: 3 }); // IRIS
+    drawLandmarks(ctx, [lm[159], lm[145], lm[386], lm[374]], {
+      color: "magenta",
+      radius: 3
+    });
+  }
+
+  // ---- Start ----
+  startCamera();
 </script>
 
-</body>
-</html>
